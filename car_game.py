@@ -2,6 +2,8 @@ import pygame
 import random
 import serial
 import serial.tools.list_ports
+import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 def find_esp32_port():
     ports = serial.tools.list_ports.comports()
@@ -33,24 +35,32 @@ score = 0
 spawn_timer = 0
 obstacles = []
 
-# Joystick thresholds — tuned to your readings
-# X axis: neutral ~2048, tune if yours differs
-# Y axis: neutral ~2880, max 4095
-JOY_LEFT    = 1000   # X below this = move left
-JOY_RIGHT   = 3000   # X above this = move right
-JOY_DEADZONE_LOW  = 1500   # Y below this = speed up
-JOY_DEADZONE_HIGH = 3500   # Y above this = slow down
+# Joystick thresholds
+JOY_LEFT          = 1000
+JOY_RIGHT         = 3000
+JOY_DEADZONE_LOW  = 1500
+JOY_DEADZONE_HIGH = 3500
 
-# Lane switch debounce — only switches once per push
 lane_switched = False
 speed = 8
+
+# --- Load images ---
+player_img = pygame.image.load("player.png").convert_alpha()
+player_img = pygame.transform.scale(player_img, (car_width, car_height))
+
+enemy_imgs = []
+for i in range(1, 13):
+    img = pygame.image.load(f"enemy{i}.png").convert_alpha()
+    img = pygame.transform.scale(img, (car_width, car_height))
+    enemy_imgs.append(img)
+
 running = True
 
 while running:
     clock.tick(60)
 
     joy_x = 2048
-    joy_y = 2880  # your neutral
+    joy_y = 2880
 
     try:
         if ser.in_waiting:
@@ -63,8 +73,6 @@ while running:
         pass
 
     # --- Lane control ---
-    # Only switch when joystick is pushed AND hasn't switched yet
-    # Reset lane_switched only when joystick returns to center
     if joy_x < JOY_LEFT:
         if not lane_switched:
             current_lane = max(0, current_lane - 1)
@@ -74,17 +82,15 @@ while running:
             current_lane = min(2, current_lane + 1)
             lane_switched = True
     else:
-        # Joystick back to center — ready for next switch
         lane_switched = False
 
-    # --- Speed control from Y axis ---
-    # Your joystick: neutral ~2880, pushed forward goes lower, pulled back goes to 4095
+    # --- Speed control ---
     if joy_y < JOY_DEADZONE_LOW:
-        speed = 14   # pushed forward
+        speed = 14
     elif joy_y > JOY_DEADZONE_HIGH:
-        speed = 4    # pulled back
+        speed = 4
     else:
-        speed = 8    # neutral
+        speed = 8
 
     # --- Keyboard fallback ---
     for event in pygame.event.get():
@@ -100,7 +106,7 @@ while running:
             if event.key == pygame.K_DOWN:
                 speed = 4
 
-    # --- Draw ---
+    # --- Draw background ---
     screen.fill((20, 20, 20))
     pygame.draw.rect(screen, (60, 60, 60), (80, 0, 340, HEIGHT))
     for y in range(0, HEIGHT, 40):
@@ -109,20 +115,25 @@ while running:
 
     car_x = lanes[current_lane] - car_width // 2
 
+    # --- Spawn obstacles ---
     spawn_timer += 1
     if spawn_timer > 45:
         lc = random.choice(lanes)
-        obstacles.append([lc - car_width // 2, -100])
+        img_index = random.randint(0, len(enemy_imgs) - 1)
+        obstacles.append([lc - car_width // 2, -100, img_index])
         spawn_timer = 0
 
+    # --- Move obstacles ---
     for o in obstacles:
         o[1] += speed
     obstacles = [o for o in obstacles if o[1] < HEIGHT + 100]
 
+    # --- Draw obstacles ---
     for o in obstacles:
-        pygame.draw.rect(screen, (255, 0, 0), (o[0], o[1], car_width, car_height))
+        screen.blit(enemy_imgs[o[2]], (o[0], o[1]))
 
-    pygame.draw.rect(screen, (0, 255, 255), (car_x, car_y, car_width, car_height))
+    # --- Draw player ---
+    screen.blit(player_img, (car_x, car_y))
 
     # --- Collision ---
     player_rect = pygame.Rect(car_x, car_y, car_width, car_height)
@@ -133,16 +144,14 @@ while running:
             break
 
     if hit:
-        # Tell ESP32 to buzz
         ser.write(b'BUZZ\n')
-
-        # Game over screen
         screen.blit(font.render("GAME OVER", True, (255, 255, 255)), (140, 300))
-        screen.blit(font.render(f"Score: {int(score)}", True, (255, 255, 255)), (160, 350))
+        screen.blit(font.render(f"Final Score: {int(score)}", True, (255, 255, 255)), (120, 350))
         pygame.display.update()
         pygame.time.delay(3000)
         running = False
 
+    # --- HUD ---
     score += speed * 0.01
     screen.blit(font.render(f"Score: {int(score)}", True, (255, 255, 255)), (20, 20))
     screen.blit(font.render(f"Speed: {speed}", True, (200, 200, 200)), (20, 55))
